@@ -1,6 +1,7 @@
 pub mod ca;
 pub mod models;
 pub mod proxy;
+pub mod system_proxy;
 
 use ca::CertificateAuthority;
 use models::{RequestMeta, RequestRecord, TrafficStore};
@@ -32,16 +33,25 @@ fn init_state(app: &tauri::AppHandle) -> Arc<AppState> {
 
 // ===== Tauri Commands =====
 
-/// 启动代理。
+/// 启动代理，并设置系统代理指向本机端口。
 #[tauri::command]
 async fn start_proxy(state: tauri::State<'_, Arc<AppState>>, port: u16) -> Result<ProxyState, String> {
-    state.proxy.start(port).await
+    let result = state.proxy.start(port).await?;
+    // 设置系统代理（Windows）
+    if let Err(e) = system_proxy::set_system_proxy(port) {
+        eprintln!("[proxy] 设置系统代理失败（代理仍已启动）: {e}");
+    }
+    Ok(result)
 }
 
-/// 停止代理。
+/// 停止代理，并恢复系统代理。
 #[tauri::command]
 async fn stop_proxy(state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
     state.proxy.stop().await;
+    // 恢复系统代理
+    if let Err(e) = system_proxy::restore_system_proxy() {
+        eprintln!("[proxy] 恢复系统代理失败: {e}");
+    }
     Ok(())
 }
 

@@ -33,7 +33,7 @@ export default function Toolbar({ onOpenSettings }: ToolbarProps) {
           {proxy.running ? (
             <span className="status-badge active">
               <Wifi size={14} />
-              代理运行中 · {proxy.local_ip}:{proxy.port}
+              代理运行中 · {proxy.local_ip}:{proxy.port} · 系统代理已自动配置
             </span>
           ) : (
             <span className="status-badge">代理未启动</span>
