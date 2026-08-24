@@ -97,11 +97,19 @@ impl ProxyEngine {
         let addr: SocketAddr = format!("0.0.0.0:{port}")
             .parse::<SocketAddr>()
             .map_err(|e: std::net::AddrParseError| e.to_string())?;
-        let listener = Arc::new(
-            TcpListener::bind(&addr)
-                .await
-                .map_err(|e| format!("绑定端口 {port} 失败：{e}"))?,
-        );
+
+        // 绑定，若被占用则等待后重试一次（处理 TIME_WAIT / 快速重启竞态）
+        let listener = match TcpListener::bind(&addr).await {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("[proxy] 端口 {port} 首次绑定失败（{}），等待后重试...", e);
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                TcpListener::bind(&addr)
+                    .await
+                    .map_err(|e| format!("绑定端口 {port} 失败：{e}"))?
+            }
+        };
+        let listener = Arc::new(listener);
 
         let local_ip = local_ip_address::local_ip()
             .map(|ip| ip.to_string())
