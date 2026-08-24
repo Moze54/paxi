@@ -11,6 +11,7 @@
 use std::sync::Mutex;
 
 /// 保存设置代理前的原始配置，以便停止时恢复。
+#[cfg(target_os = "windows")]
 #[derive(Clone, Default)]
 struct OriginalProxy {
     enable: u32,
@@ -19,6 +20,7 @@ struct OriginalProxy {
 }
 
 /// 全局保存原始代理配置。
+#[cfg(target_os = "windows")]
 static ORIGINAL_PROXY: Mutex<Option<OriginalProxy>> = Mutex::new(None);
 
 /// 注册表路径。
@@ -157,13 +159,116 @@ fn notify_proxy_change() {
     }
 }
 
-// 非 Windows 平台的空实现。
-#[cfg(not(target_os = "windows"))]
+// ===== macOS：通过 networksetup 设置系统代理 =====
+
+#[cfg(target_os = "macos")]
+pub fn set_system_proxy(port: u16) -> Result<(), String> {
+    let services = list_network_services()?;
+    let mut saved: Vec<(String, bool, String, u16)> = Vec::new(); // (service, web_enabled, host, port)
+
+    for service in &services {
+        // 保存 HTTP 代理原状态
+        if let Some((enabled, host, p)) = get_proxy_state(&format!("getwebproxy"), service) {
+            saved.push((service.clone(), enabled, host, p));
+        }
+        // 设置 HTTP / HTTPS 代理指向本机
+        run_networksetup(&["-setwebproxy", service, "127.0.0.1", &port.to_string()])?;
+        run_networksetup(&["-setsecurewebproxy", service, "127.0.0.1", &port.to_string()])?;
+        // 本地地址不走代理
+        run_networksetup(&[
+            "-setproxybypassdomains",
+            service,
+            "localhost",
+            "127.0.0.1",
+            "*.local",
+            "169.254/16",
+        ])?;
+    }
+
+    *ORIGINAL_PROXY.lock().unwrap() = Some(saved);
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+pub fn restore_system_proxy() -> Result<(), String> {
+    let saved = ORIGINAL_PROXY.lock().unwrap().take();
+    let Some(saved) = saved else {
+        return Ok(());
+    };
+
+    for (service, was_enabled, host, port) in saved {
+        if was_enabled {
+            let host = if host.is_empty() { "127.0.0.1".to_string() } else { host };
+            let _ = run_networksetup(&["-setwebproxy", &service, &host, &port.to_string()]);
+        } else {
+            let _ = run_networksetup(&["-setwebproxystate", &service, "off"]);
+        }
+    }
+    Ok(())
+}
+
+/// 列出所有网络服务（跳过首行提示与禁用项）。
+#[cfg(target_os = "macos")]
+fn list_network_services() -> Result<Vec<String>, String> {
+    let out = run_networksetup(&["-listallnetworkservices"])?;
+    Ok(out
+        .lines()
+        .skip(1)
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty() && !l.starts_with('*'))
+        .map(|l| l.to_string())
+        .collect())
+}
+
+/// 读取某服务某类代理的状态：返回 (是否启用, 服务器, 端口)。
+#[cfg(target_os = "macos")]
+fn get_proxy_state(kind: &str, service: &str) -> Option<(bool, String, u16)> {
+    let out = run_networksetup(&[&format!("-{kind}"), service]).ok()?;
+    let mut enabled = false;
+    let mut host = String::new();
+    let mut port = 0u16;
+    for line in out.lines() {
+        if let Some(v) = line.strip_prefix("Enabled:") {
+            enabled = v.trim().eq_ignore_ascii_case("yes");
+        } else if let Some(v) = line.strip_prefix("Server:") {
+            host = v.trim().to_string();
+        } else if let Some(v) = line.strip_prefix("Port:") {
+            port = v.trim().parse().unwrap_or(0);
+        }
+    }
+    Some((enabled, host, port))
+}
+
+/// 执行 networksetup，成功返回 stdout。
+#[cfg(target_os = "macos")]
+fn run_networksetup(args: &[&str]) -> Result<String, String> {
+    use std::process::Command;
+    let out = Command::new("networksetup")
+        .args(args)
+        .output()
+        .map_err(|e| format!("执行 networksetup 失败：{e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "networksetup {:?} 失败：{}",
+            args,
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+/// macOS 保存的原始代理状态。
+#[cfg(target_os = "macos")]
+static ORIGINAL_PROXY: Mutex<Option<Vec<(String, bool, String, u16)>>> = Mutex::new(None);
+
+// ===== 其他平台暂不支持 =====
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub fn set_system_proxy(_port: u16) -> Result<(), String> {
     Err("当前平台尚未支持自动设置系统代理".to_string())
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub fn restore_system_proxy() -> Result<(), String> {
     Ok(())
 }

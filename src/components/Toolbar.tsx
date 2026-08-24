@@ -1,8 +1,27 @@
 import { useAppStore } from "../lib/store";
-import { Play, Square, Trash2, Settings, Wifi } from "lucide-react";
+import { exportHar, importHar } from "../lib/ipc";
+import { open } from "@tauri-apps/plugin-dialog";
+import {
+  Play,
+  Square,
+  Trash2,
+  Settings,
+  Wifi,
+  Smartphone,
+  MonitorSmartphone,
+  Zap,
+  Sun,
+  Moon,
+  FileDown,
+  FileUp,
+  BarChart3,
+} from "lucide-react";
 
 interface ToolbarProps {
   onOpenSettings: () => void;
+  onOpenConnect: () => void;
+  onOpenRules: () => void;
+  onOpenStats: () => void;
 }
 
 const METHOD_OPTIONS = ["", "GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"];
@@ -21,7 +40,7 @@ const SCHEME_OPTIONS = [
   { value: "ws", label: "WebSocket" },
 ];
 
-export default function Toolbar({ onOpenSettings }: ToolbarProps) {
+export default function Toolbar({ onOpenSettings, onOpenConnect, onOpenRules, onOpenStats }: ToolbarProps) {
   const {
     proxy,
     toggleProxy,
@@ -30,13 +49,48 @@ export default function Toolbar({ onOpenSettings }: ToolbarProps) {
     setFilter,
     loading,
     requests,
+    clients,
+    rules,
+    theme,
+    toggleTheme,
+    setError,
     methodFilter,
     setMethodFilter,
     statusFilter,
     setStatusFilter,
     schemeFilter,
     setSchemeFilter,
+    refreshRequests,
   } = useAppStore();
+
+  const remoteClients = clients.filter((c) => !c.is_local);
+  const enabledRules = rules.filter((r) => r.enabled).length;
+
+  const handleExportHar = async () => {
+    try {
+      const msg = await exportHar();
+      setError(null);
+      alert(msg);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const handleImportHar = async () => {
+    try {
+      const picked = await open({
+        multiple: false,
+        filters: [{ name: "HAR", extensions: ["har", "json"] }],
+      });
+      if (typeof picked !== "string") return; // 取消
+      const count = await importHar(picked);
+      setError(null);
+      alert(`已导入 ${count} 条记录`);
+      await refreshRequests();
+    } catch (e) {
+      setError(String(e));
+    }
+  };
 
   return (
     <div className="toolbar-wrap">
@@ -63,12 +117,22 @@ export default function Toolbar({ onOpenSettings }: ToolbarProps) {
             {proxy.running ? (
               <span className="status-badge active">
                 <Wifi size={14} />
-                代理运行中 · {proxy.local_ip}:{proxy.port} · 系统代理已自动配置
+                {proxy.local_ip}:{proxy.port}
               </span>
             ) : (
               <span className="status-badge">代理未启动</span>
             )}
           </div>
+
+          {remoteClients.length > 0 && (
+            <span
+              className="status-badge devices"
+              title={remoteClients.map((c) => `${c.ip} (${c.connections} 连接)`).join("\n")}
+            >
+              <MonitorSmartphone size={14} />
+              {remoteClients.length} 台设备
+            </span>
+          )}
 
           <span className="count-badge">{requests.length} 条记录</span>
         </div>
@@ -85,17 +149,56 @@ export default function Toolbar({ onOpenSettings }: ToolbarProps) {
 
         <div className="toolbar-right">
           <button
+            className={`btn btn-rules ${enabledRules > 0 ? "has-rules" : ""}`}
+            onClick={onOpenRules}
+            title={`规则引擎（${enabledRules} 条启用）`}
+          >
+            <Zap size={16} />
+            {enabledRules > 0 && <span className="rules-count">{enabledRules}</span>}
+          </button>
+          <button
+            className="btn btn-icon"
+            onClick={onOpenStats}
+            title="流量统计"
+          >
+            <BarChart3 size={16} />
+          </button>
+          <button
+            className="btn btn-icon"
+            onClick={toggleTheme}
+            title={theme === "dark" ? "切换亮色主题" : "切换暗色主题"}
+          >
+            {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+          </button>
+          <button
+            className="btn btn-icon"
+            onClick={handleImportHar}
+            title="从 HAR 文件导入记录（桌面）"
+          >
+            <FileUp size={16} />
+          </button>
+          <button
+            className="btn btn-icon"
+            onClick={handleExportHar}
+            title="导出全部记录为 HAR（桌面）"
+          >
+            <FileDown size={16} />
+          </button>
+          <button
+            className="btn btn-primary"
+            onClick={onOpenConnect}
+            title="手机扫码连接（二维码 / 证书下载）"
+          >
+            <Smartphone size={16} /> 连接手机
+          </button>
+          <button
             className="btn btn-danger"
             onClick={clearAll}
             title="清空所有抓包记录"
           >
             <Trash2 size={16} /> 清空
           </button>
-          <button
-            className="btn btn-icon"
-            onClick={onOpenSettings}
-            title="设置（AI / 证书）"
-          >
+          <button className="btn btn-icon" onClick={onOpenSettings} title="设置（AI / 证书）">
             <Settings size={16} />
           </button>
         </div>

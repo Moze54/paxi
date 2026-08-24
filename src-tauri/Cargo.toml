@@ -4,6 +4,9 @@ version = "0.1.0"
 description = "A desktop packet capture tool built with Tauri"
 authors = ["you"]
 edition = "2021"
+# 包内有两个二进制（paxi 主程序 / paxi-cli 命令行抓包），
+# 默认运行主程序（tauri dev 的 cargo run 依赖此配置）
+default-run = "paxi"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -20,6 +23,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
@@ -30,7 +34,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 rustls-pemfile = "2"
 hyper = { version = "1", features = ["http1", "http2", "server", "client"] }
 hyper-util = { version = "0.1", features = ["full"] }
-hyper-rustls = { version = "0.27", default-features = false, features = ["ring", "http1", "native-tokio"] }
+hyper-rustls = { version = "0.27", default-features = false, features = ["ring", "http1", "http2", "native-tokio"] }
 http-body-util = "0.1"
 bytes = "1"
 http = "1"
@@ -50,5 +54,21 @@ chrono = { version = "0.4", features = ["serde"] }
 local-ip-address = "0.6"
 reqwest = { version = "0.12", features = ["json", "blocking"] }
 
+# 存储（SQLite 落盘）
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+# WebSocket 帧转发与记录
+tokio-tungstenite = { version = "0.24", features = ["connect", "rustls-tls-webpki-roots"] }
+futures-util = "0.3"
+
+# 门户服务（握手 key 计算 + DER 转换）
+sha1 = "0.10"
+base64 = "0.22"
+
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
+windows-sys = { version = "0.52", features = [
+  "Win32_Foundation",
+  "Win32_NetworkManagement_IpHelper",
+  "Win32_System_Diagnostics_ToolHelp",
+] }

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { RequestRecord, aiChat } from "../lib/ipc";
-import { Sparkles, X, Loader2 } from "lucide-react";
+import { redactForAI } from "../lib/redact";
+import { Sparkles, X, Loader2, ShieldCheck } from "lucide-react";
 
 interface AiConfig {
   baseUrl: string;
@@ -29,6 +30,8 @@ export default function AiPanel({ record, onClose }: AiPanelProps) {
   const [result, setResult] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>("");
+  // 脱敏开关（默认开）
+  const [redact, setRedact] = useState(true);
 
   useEffect(() => {
     setResult("");
@@ -40,8 +43,18 @@ export default function AiPanel({ record, onClose }: AiPanelProps) {
     localStorage.setItem(CONFIG_KEY, JSON.stringify(c));
   };
 
-  const buildPrompt = (r: RequestRecord): string => {
+  const buildPrompt = (r: RequestRecord, redacted: boolean): string => {
+    // 脱敏处理（在构造 prompt 前统一打码敏感信息，原始数据不离开本机）
+    const data = redacted
+      ? redactForAI(r)
+      : {
+          request_headers: r.request_headers,
+          request_body: r.request_body,
+          response_headers: r.response_headers,
+          response_body: r.response_body,
+        };
     return `请分析以下这个网络请求，帮我理解它的用途和特征：
+${redacted ? "（注意：敏感字段已脱敏，不要猜测原始值）" : ""}
 
 方法：${r.method}
 URL：${r.url}
@@ -50,16 +63,16 @@ URL：${r.url}
 耗时：${r.duration_ms}ms
 
 请求头：
-${r.request_headers.map(([k, v]) => `  ${k}: ${v}`).join("\n")}
+${data.request_headers.map(([k, v]) => `  ${k}: ${v}`).join("\n")}
 
 请求体：
-${r.request_body || "（无）"}
+${data.request_body || "（无）"}
 
 响应头：
-${r.response_headers.map(([k, v]) => `  ${k}: ${v}`).join("\n")}
+${data.response_headers.map(([k, v]) => `  ${k}: ${v}`).join("\n")}
 
 响应体（可能被截断）：
-${r.response_body || "（无）"}
+${data.response_body || "（无）"}
 
 请从以下几个角度分析：
 1. 这个接口的用途是什么（属于什么业务功能）
@@ -85,7 +98,7 @@ ${r.response_body || "（无）"}
             content:
               "你是一名精通网络协议与逆向分析的专家，擅长分析 HTTP 请求抓包数据。",
           },
-          { role: "user", content: buildPrompt(record) },
+          { role: "user", content: buildPrompt(record, redact) },
         ],
       });
       setResult(content);
@@ -119,6 +132,14 @@ ${r.response_body || "（无）"}
           </div>
 
           <div className="ai-actions">
+            <label className="ai-redact-toggle" title="发送前自动打码 Authorization/Cookie/token 等敏感信息">
+              <input
+                type="checkbox"
+                checked={redact}
+                onChange={(e) => setRedact(e.target.checked)}
+              />
+              <ShieldCheck size={13} /> 脱敏
+            </label>
             <button
               className="btn btn-ai"
               onClick={analyze}

@@ -1,14 +1,38 @@
-//! 流量记录的数据结构与内存存储。
+//! 流量记录的数据结构（存储见 storage 模块）。
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+
+/// WebSocket 帧方向。
+pub const WS_DIR_C2S: u8 = 0; // 客户端 → 服务端
+pub const WS_DIR_S2C: u8 = 1; // 服务端 → 客户端
+
+/// 单条 WebSocket 帧。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WsFrame {
+    /// 该连接内的序号（两个方向共享递增）
+    pub seq: u64,
+    /// 方向：0 = 客户端→服务端，1 = 服务端→客户端
+    pub dir: u8,
+    /// opcode：text / binary / ping / pong / close
+    pub opcode: String,
+    /// payload 字节数
+    pub payload_len: u64,
+    /// 文本帧的 payload（截断存储），二进制帧为 None
+    pub payload_text: Option<String>,
+    /// 时间戳（epoch 毫秒）
+    pub ts_ms: u128,
+}
 
 /// 单条抓包记录的完整数据结构。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RequestRecord {
     /// 唯一 id
     pub id: String,
+    /// 发起请求的客户端 IP（若有）
+    pub client_ip: Option<String>,
+    /// 来源进程名（本机进程识别，仅 Windows；手机无）
+    #[serde(default)]
+    pub client_process: Option<String>,
     /// 请求方法，如 GET / POST
     pub method: String,
     /// 完整 URL
@@ -17,24 +41,41 @@ pub struct RequestRecord {
     pub host: String,
     /// 协议 http / https / ws / wss
     pub scheme: String,
-    /// 请求体（正文），可能被截断
-    pub request_body: Option<String>,
-    /// 响应体（正文），可能被截断
-    pub response_body: Option<String>,
     /// 状态码
     pub status: u16,
     /// 请求头
     pub request_headers: Vec<(String, String)>,
     /// 响应头
     pub response_headers: Vec<(String, String)>,
+    /// 请求体（文本展示形式，可能被截断）
+    pub request_body: Option<String>,
+    /// 响应体（文本展示形式，可能被截断）
+    pub response_body: Option<String>,
+    /// 请求体大小（原始字节数）
+    pub request_body_size: u64,
+    /// 响应体大小（原始字节数）
+    pub response_body_size: u64,
+    /// 响应 Content-Type
+    pub content_type: Option<String>,
     /// 耗时（毫秒）
     pub duration_ms: u128,
     /// 开始时间（epoch 毫秒）
     pub started_at: u128,
     /// 错误信息（若有）
     pub error: Option<String>,
-    /// 是否为 WebSocket 握手
+    /// 是否为 WebSocket
     pub is_websocket: bool,
+    /// WebSocket 帧数（实时累计）
+    pub ws_frame_count: u64,
+    /// 命中的规则名（若有）
+    #[serde(default)]
+    pub matched_rule: Option<String>,
+    /// 是否为重放请求（Replay 产生）
+    #[serde(default)]
+    pub is_replay: bool,
+    /// 是否为 TLS 直通（不解密，仅转发；App 有证书校验时使用）
+    #[serde(default)]
+    pub passthrough: bool,
 }
 
 /// 会话列表项（轻量，用于列表展示）。
@@ -49,7 +90,18 @@ pub struct RequestMeta {
     pub duration_ms: u128,
     pub started_at: u128,
     pub is_websocket: bool,
+    pub ws_frame_count: u64,
     pub error: Option<String>,
+    pub client_ip: Option<String>,
+    #[serde(default)]
+    pub client_process: Option<String>,
+    pub request_body_size: u64,
+    pub response_body_size: u64,
+    pub content_type: Option<String>,
+    #[serde(default)]
+    pub is_replay: bool,
+    #[serde(default)]
+    pub passthrough: bool,
 }
 
 impl From<&RequestRecord> for RequestMeta {
@@ -64,68 +116,25 @@ impl From<&RequestRecord> for RequestMeta {
             duration_ms: r.duration_ms,
             started_at: r.started_at,
             is_websocket: r.is_websocket,
+            ws_frame_count: r.ws_frame_count,
             error: r.error.clone(),
+            client_ip: r.client_ip.clone(),
+            request_body_size: r.request_body_size,
+            response_body_size: r.response_body_size,
+            content_type: r.content_type.clone(),
+            client_process: r.client_process.clone(),
+            is_replay: r.is_replay,
+            passthrough: r.passthrough,
         }
     }
 }
 
-/// 内存流量存储（环形缓冲）。
-pub struct TrafficStore {
-    /// 完整记录映射 id -> record
-    records: Mutex<HashMap<String, RequestRecord>>,
-    /// 有序的 id 列表（新->旧，用于列表展示）
-    order: Mutex<Vec<String>>,
-    /// 最大保留条数
-    capacity: usize,
-}
-
-impl TrafficStore {
-    pub fn new(capacity: usize) -> Arc<Self> {
-        Arc::new(Self {
-            records: Mutex::new(HashMap::new()),
-            order: Mutex::new(Vec::new()),
-            capacity,
-        })
-    }
-
-    /// 插入一条记录，返回 meta。
-    pub fn insert(self: &Arc<Self>, record: RequestRecord) -> RequestMeta {
-        let meta = RequestMeta::from(&record);
-        let id = record.id.clone();
-        {
-            let mut order = self.order.lock().unwrap();
-            order.insert(0, id.clone());
-            // 环形缓冲：超出容量时移除最旧的
-            while order.len() > self.capacity {
-                if let Some(old) = order.pop() {
-                    self.records.lock().unwrap().remove(&old);
-                }
-            }
-        }
-        self.records.lock().unwrap().insert(id, record);
-        meta
-    }
-
-    /// 获取列表（最新在前）。
-    pub fn list(&self) -> Vec<RequestMeta> {
-        let order = self.order.lock().unwrap();
-        let records = self.records.lock().unwrap();
-        order
-            .iter()
-            .filter_map(|id| records.get(id).map(RequestMeta::from))
-            .collect()
-    }
-
-    /// 获取单条详情。
-    pub fn get(&self, id: &str) -> Option<RequestRecord> {
-        self.records.lock().unwrap().get(id).cloned()
-    }
-
-    /// 清空所有记录。
-    pub fn clear(&self) {
-        self.records.lock().unwrap().clear();
-        self.order.lock().unwrap().clear();
-    }
+/// 当前时间（epoch 毫秒）。
+pub fn now_ms() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
 }
 
 /// body 截断上限（防止超大响应撑爆内存）。
@@ -194,4 +203,6 @@ pub fn is_text_content(content_type: Option<&str>) -> bool {
         || ct.contains("x-www-form-urlencoded")
         || ct.contains("html")
         || ct.contains("form")
+        || ct.contains("ndjson")
+        || ct.contains("event-stream")
 }

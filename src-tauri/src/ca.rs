@@ -6,8 +6,12 @@
 //! 3. 代理用这张叶子证书与客户端完成 TLS 握手，从而能解密客户端发出的 HTTPS 内容。
 //! 4. 代理再以普通客户端身份连接真实的 example.com 服务器。
 
-use rcgen::{BasicConstraints, Certificate, CertificateParams, DnType, IsCa, KeyPair, KeyUsagePurpose};
+use rcgen::{
+    BasicConstraints, Certificate, CertificateParams, DnType, IsCa, KeyPair, KeyUsagePurpose,
+    SanType,
+};
 use std::fs;
+use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use time::{Duration, OffsetDateTime};
@@ -99,11 +103,18 @@ impl CertificateAuthority {
             }
         }
 
-        let san_host = host.to_string();
-        let mut params = CertificateParams::new(vec![san_host.clone()]).map_err(|e| e.to_string())?;
-        params
-            .distinguished_name
-            .push(DnType::CommonName, san_host.clone());
+        // SAN：IP 直连（如微信 mars 框架）用 IpAddress 类型，域名用 DnsName
+        let mut params = if let Ok(ip) = host.parse::<IpAddr>() {
+            let mut p = CertificateParams::new(vec![]).map_err(|e| e.to_string())?;
+            p.subject_alt_names.push(SanType::IpAddress(ip));
+            p.distinguished_name.push(DnType::CommonName, host.to_string());
+            p
+        } else {
+            let mut p = CertificateParams::new(vec![host.to_string()])
+                .map_err(|e| e.to_string())?;
+            p.distinguished_name.push(DnType::CommonName, host.to_string());
+            p
+        };
         params.is_ca = IsCa::NoCa;
         params.key_usages = vec![
             KeyUsagePurpose::DigitalSignature,
@@ -121,7 +132,7 @@ impl CertificateAuthority {
         let key_pem = key_pair.serialize_pem();
 
         let mut cache = self.cache.lock().unwrap();
-        cache.insert(san_host, (cert_pem.clone(), key_pem.clone()));
+        cache.insert(host.to_string(), (cert_pem.clone(), key_pem.clone()));
         Ok((cert_pem, key_pem))
     }
 
