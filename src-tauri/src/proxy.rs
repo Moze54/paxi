@@ -199,7 +199,7 @@ impl ProxyEngine {
                 resolved = async {
                     match &mut pending_upgrade {
                         Some((on_upgrade, _, _, _)) => Some(on_upgrade.await),
-                        None => None,
+                        None => std::future::pending::<Option<Result<hyper::upgrade::Upgraded, hyper::Error>>>().await,
                     }
                 } => {
                     if let Some(r) = resolved {
