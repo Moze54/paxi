@@ -244,4 +244,16 @@ mod tests {
         // lib 单测进程名形如 paxi-<hash>.exe
         assert!(n.to_lowercase().contains("paxi"), "进程名应是测试二进制：{n}");
     }
+
+    #[test]
+    fn parse_ipv4_variants() {
+        use std::net::Ipv4Addr;
+        assert_eq!(parse_ipv4("127.0.0.1"), Some(Ipv4Addr::new(127, 0, 0, 1)));
+        assert_eq!(parse_ipv4("::ffff:127.0.0.1"), Some(Ipv4Addr::new(127, 0, 0, 1)));
+        assert_eq!(parse_ipv4("192.168.1.5"), Some(Ipv4Addr::new(192, 168, 1, 5)));
+        // IPv6 原生（::1）或乱串 → None
+        assert_eq!(parse_ipv4("::1"), None);
+        assert_eq!(parse_ipv4("fe80::1"), None);
+        assert_eq!(parse_ipv4("not-an-ip"), None);
+    }
 }

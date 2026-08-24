@@ -33,6 +33,12 @@ function UrlDisplay({ url }: { url: string }) {
   );
 }
 
+/** 进程名压缩为徽标（去 .exe，取前 12 字符） */
+function shortApp(process: string): string {
+  const base = process.replace(/\.exe$/i, "");
+  return base.length > 12 ? base.slice(0, 12) + "…" : base;
+}
+
 export default function RequestList() {
   const {
     requests,
@@ -242,6 +248,14 @@ export default function RequestList() {
                     >
                       <Star size={11} fill={marks[r.id]?.star ? "currentColor" : "none"} />
                     </button>
+                    {r.client_process && (
+                      <span
+                        className="app-tag"
+                        title={`来源：${r.client_process}`}
+                      >
+                        {shortApp(r.client_process)}
+                      </span>
+                    )}
                     <span className="scheme-icon" title={r.is_websocket ? "WebSocket" : undefined}>
                       {r.is_websocket ? (
                         <Zap size={11} color="#f39c12" />

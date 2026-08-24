@@ -1671,6 +1671,22 @@ body,
   color: var(--orange);
 }
 
+/* 来源进程徽标 */
+.app-tag {
+  display: inline-block;
+  font-size: 10px;
+  line-height: 14px;
+  padding: 0 5px;
+  margin-right: 5px;
+  border-radius: 4px;
+  background: rgba(52, 152, 219, 0.14);
+  color: var(--syn-key, #3498db);
+  border: 1px solid rgba(52, 152, 219, 0.25);
+  flex-shrink: 0;
+  vertical-align: middle;
+  cursor: default;
+}
+
 .request-row.mark-red { border-left: 3px solid #e74c3c; }
 .request-row.mark-yellow { border-left: 3px solid #f1c40f; }
 .request-row.mark-green { border-left: 3px solid #2ecc71; }
