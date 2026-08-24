@@ -12,9 +12,11 @@
   "app": {
     "windows": [
       {
-        "title": "paxi",
-        "width": 800,
-        "height": 600
+        "title": "paxi 抓包工具",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 960,
+        "minHeight": 600
       }
     ],
     "security": {
