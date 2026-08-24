@@ -3,17 +3,47 @@ import { methodColor, statusColor, formatDuration, formatTime } from "../lib/ipc
 import { Globe, Lock, Zap } from "lucide-react";
 
 export default function RequestList() {
-  const { requests, filter, selectedId, selectRequest } = useAppStore();
+  const {
+    requests,
+    filter,
+    selectedId,
+    selectRequest,
+    methodFilter,
+    statusFilter,
+    schemeFilter,
+  } = useAppStore();
 
   const filtered = requests.filter((r) => {
-    if (!filter) return true;
-    const f = filter.toLowerCase();
-    return (
-      r.url.toLowerCase().includes(f) ||
-      r.method.toLowerCase().includes(f) ||
-      String(r.status).includes(f) ||
-      r.host.toLowerCase().includes(f)
-    );
+    // 关键字搜索
+    if (filter) {
+      const f = filter.toLowerCase();
+      const match =
+        r.url.toLowerCase().includes(f) ||
+        r.method.toLowerCase().includes(f) ||
+        String(r.status).includes(f) ||
+        r.host.toLowerCase().includes(f);
+      if (!match) return false;
+    }
+    // 方法筛选
+    if (methodFilter && r.method.toUpperCase() !== methodFilter) return false;
+    // 状态筛选
+    if (statusFilter) {
+      if (statusFilter === "error") {
+        if (r.status !== 0) return false;
+      } else {
+        const prefix = statusFilter[0]; // "2" / "3" / "4" / "5"
+        if (Math.floor(r.status / 100) !== Number(prefix)) return false;
+      }
+    }
+    // 协议筛选
+    if (schemeFilter) {
+      if (schemeFilter === "ws") {
+        if (!r.is_websocket) return false;
+      } else if (r.scheme !== schemeFilter) {
+        return false;
+      }
+    }
+    return true;
   });
 
   return (

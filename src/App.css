@@ -43,14 +43,68 @@ body,
 }
 
 /* ===== 工具栏 ===== */
+.toolbar-wrap {
+  flex-shrink: 0;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+}
+
 .toolbar {
   display: flex;
   align-items: center;
   gap: 12px;
   padding: 8px 12px;
-  background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
+}
+
+/* ===== 筛选栏 ===== */
+.filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px 8px;
+  flex-wrap: wrap;
+}
+
+.filter-label {
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.filter-group {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.filter-divider {
+  width: 1px;
+  height: 18px;
+  background: var(--border);
+  margin: 0 4px;
+}
+
+.filter-chip {
+  padding: 2px 8px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.filter-chip:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.filter-chip.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
 }
 
 .toolbar-left {
@@ -126,6 +180,17 @@ body,
   background: var(--accent);
   border-color: var(--accent);
   color: #fff;
+}
+
+.btn-danger {
+  background: transparent;
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.btn-danger:hover {
+  background: rgba(231, 76, 60, 0.15);
+  border-color: var(--red);
 }
 
 .btn-ghost {

@@ -21,6 +21,10 @@ interface AppStore {
   selectedDetail: RequestRecord | null;
   // 过滤条件
   filter: string;
+  // 分类筛选
+  methodFilter: string; // "" | "GET" | "POST" | ...
+  statusFilter: string; // "" | "2xx" | "3xx" | "4xx" | "5xx" | "error"
+  schemeFilter: string; // "" | "http" | "https" | "ws"
   // 加载状态
   loading: boolean;
   // 错误提示
@@ -33,6 +37,9 @@ interface AppStore {
   selectRequest: (id: string) => Promise<void>;
   clearAll: () => Promise<void>;
   setFilter: (f: string) => void;
+  setMethodFilter: (m: string) => void;
+  setStatusFilter: (s: string) => void;
+  setSchemeFilter: (s: string) => void;
   setError: (e: string | null) => void;
 }
 
@@ -42,6 +49,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
   selectedId: null,
   selectedDetail: null,
   filter: "",
+  methodFilter: "",
+  statusFilter: "",
+  schemeFilter: "",
   loading: false,
   error: null,
 
@@ -101,5 +111,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
 
   setFilter: (f) => set({ filter: f }),
+  setMethodFilter: (m) => set({ methodFilter: m }),
+  setStatusFilter: (s) => set({ statusFilter: s }),
+  setSchemeFilter: (s) => set({ schemeFilter: s }),
   setError: (e) => set({ error: e }),
 }));
