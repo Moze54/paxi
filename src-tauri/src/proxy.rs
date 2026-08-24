@@ -17,6 +17,7 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::client::legacy::Client;
+use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use serde::Serialize;
 use std::convert::Infallible;
@@ -29,6 +30,16 @@ use tokio_rustls::rustls::{pki_types::ServerName, ServerConfig};
 use tokio_rustls::TlsAcceptor;
 use uuid::Uuid;
 
+/// 安装 rustls CryptoProvider（ring），确保 TLS 可用。
+static INSTALL_RUSTLS_PROVIDER: std::sync::Once = std::sync::Once::new();
+
+fn ensure_rustls_provider() {
+    INSTALL_RUSTLS_PROVIDER.call_once(|| {
+        // 若已被安装则忽略错误；否则安装 ring provider
+        let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
+    });
+}
+
 /// 全局代理状态。
 #[derive(Clone, Serialize)]
 pub struct ProxyState {
@@ -37,12 +48,20 @@ pub struct ProxyState {
     pub local_ip: String,
 }
 
+/// CONNECT 升级上下文：承载 upgrade future 及后续 TLS 中间人所需的信息。
+struct UpgradeContext {
+    on_upgrade: hyper::upgrade::OnUpgrade,
+    host: String,
+    ca: Arc<CertificateAuthority>,
+    engine: Arc<ProxyEngine>,
+}
+
 /// 代理引擎。
 pub struct ProxyEngine {
     ca: Arc<CertificateAuthority>,
     store: Arc<TrafficStore>,
     /// 用于向真实服务器发请求的 HTTP 客户端（支持 HTTPS）。
-    client: Client<hyper_util::client::legacy::connect::HttpConnector, Full<Bytes>>,
+    client: Client<hyper_rustls::HttpsConnector<HttpConnector>, Full<Bytes>>,
     /// 当前 TCP 监听器（用于停止）。
     listener: Mutex<Option<Arc<TcpListener>>>,
     state: Mutex<ProxyState>,
@@ -50,10 +69,18 @@ pub struct ProxyEngine {
 
 impl ProxyEngine {
     pub fn new(ca: Arc<CertificateAuthority>, store: Arc<TrafficStore>) -> Arc<Self> {
+        ensure_rustls_provider();
+        // 构建支持 HTTPS 的客户端（用 HttpsConnector 包裹 HttpConnector）
+        let https = hyper_rustls::HttpsConnectorBuilder::new()
+            .with_native_roots()
+            .expect("failed to load native root certs")
+            .https_or_http()
+            .enable_http1()
+            .build();
         Arc::new(Self {
             ca,
             store,
-            client: Client::builder(TokioExecutor::new()).build_http(),
+            client: Client::builder(TokioExecutor::new()).build(https),
             listener: Mutex::new(None),
             state: Mutex::new(ProxyState {
                 running: false,
@@ -125,24 +152,75 @@ impl ProxyEngine {
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
+        // 通道：service 闭包把 CONNECT 的 upgrade 上下文发给连接循环。
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<UpgradeContext>();
+
+        let engine = self.clone();
         let service = service_fn(move |req: Request<Incoming>| {
-            let engine = self.clone();
-            async move { engine.handle_request(req).await }
+            let engine = engine.clone();
+            let tx = tx.clone();
+            async move { engine.handle_request(req, tx).await }
         });
 
+        let io = TokioIo::new(stream);
         let conn = http1::Builder::new()
             .preserve_header_case(true)
-            .serve_connection(TokioIo::new(stream), service)
+            .serve_connection(io, service)
             .with_upgrades();
 
-        // 处理升级（CONNECT 的中间人）
         tokio::pin!(conn);
+
+        // 主循环：驱动连接，并处理 CONNECT 升级。
+        // 关键：conn 因 upgrade 返回 Ok 时，on_upgrade 已就绪，需继续消费 rx 里的上下文。
+        let mut pending_upgrade: Option<(hyper::upgrade::OnUpgrade, String, Arc<CertificateAuthority>, Arc<Self>)> = None;
+
         loop {
-            match conn.as_mut().await {
-                Ok(_) => break,
-                Err(e) => {
-                    eprintln!("[proxy] connection error: {e}");
-                    break;
+            tokio::select! {
+                res = &mut conn => {
+                    match res {
+                        Ok(()) => {
+                            // conn 可能因 upgrade 或正常关闭而返回。
+                            // 先消费 rx 中可能存在的 upgrade 上下文，再决定是否退出。
+                            while let Ok(ctx) = rx.try_recv() {
+                                pending_upgrade = Some((ctx.on_upgrade, ctx.host, ctx.ca, ctx.engine));
+                            }
+                            // 若有待处理的 upgrade，继续处理；否则正常退出。
+                            if pending_upgrade.is_none() {
+                                break;
+                            }
+                            // 继续循环，让 on_upgrade 分支被 poll
+                        }
+                        Err(e) => {
+                            eprintln!("[proxy] connection error: {e}");
+                            break;
+                        }
+                    }
+                }
+                resolved = async {
+                    match &mut pending_upgrade {
+                        Some((on_upgrade, _, _, _)) => Some(on_upgrade.await),
+                        None => None,
+                    }
+                } => {
+                    if let Some(r) = resolved {
+                        if let Some((_, host, ca, engine)) = pending_upgrade.take() {
+                            match r {
+                                Ok(upgraded) => {
+                                    tauri::async_runtime::spawn(async move {
+                                        let _ = engine.handle_tls_upgrade(upgraded, host, ca).await;
+                                    });
+                                }
+                                Err(e) => {
+                                    eprintln!("[proxy] upgrade error: {e}");
+                                }
+                            }
+                        }
+                    }
+                }
+                ctx = rx.recv() => {
+                    if let Some(ctx) = ctx {
+                        pending_upgrade = Some((ctx.on_upgrade, ctx.host, ctx.ca, ctx.engine));
+                    }
                 }
             }
         }
@@ -154,10 +232,11 @@ impl ProxyEngine {
     async fn handle_request(
         self: Arc<Self>,
         req: Request<Incoming>,
+        tx: tokio::sync::mpsc::UnboundedSender<UpgradeContext>,
     ) -> Result<Response<Full<Bytes>>, Infallible> {
         // HTTPS CONNECT：建立中间人隧道
         if req.method() == Method::CONNECT {
-            return match self.handle_connect(req).await {
+            return match self.handle_connect(req, tx).await {
                 Ok(resp) => Ok(resp),
                 Err(e) => {
                     eprintln!("[proxy] CONNECT error: {e}");
@@ -329,10 +408,11 @@ impl ProxyEngine {
         }
     }
 
-    /// 处理 HTTPS CONNECT：返回 200 并安排 TLS 中间人升级。
+    /// 处理 HTTPS CONNECT：返回 200 并通过通道发送 upgrade 上下文。
     async fn handle_connect(
         self: Arc<Self>,
         mut req: Request<Incoming>,
+        tx: tokio::sync::mpsc::UnboundedSender<UpgradeContext>,
     ) -> Result<Response<Full<Bytes>>, String> {
         // CONNECT 的目标 host:port
         let host_port = req.uri().to_string();
@@ -340,18 +420,12 @@ impl ProxyEngine {
 
         let on_upgrade = hyper::upgrade::on(&mut req);
 
-        let engine = self.clone();
-        let ca = self.ca.clone();
-        // 后台处理升级：在升级流上做 TLS，然后跑内层 HTTP server
-        tauri::async_runtime::spawn(async move {
-            match on_upgrade.await {
-                Ok(upgraded) => {
-                    let _ = engine.handle_tls_upgrade(upgraded, host, ca).await;
-                }
-                Err(e) => {
-                    eprintln!("[proxy] upgrade error: {e}");
-                }
-            }
+        // 把 upgrade 上下文发送给连接循环
+        let _ = tx.send(UpgradeContext {
+            on_upgrade,
+            host,
+            ca: self.ca.clone(),
+            engine: self.clone(),
         });
 
         // 返回 200 Connection Established

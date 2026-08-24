@@ -1,6 +1,6 @@
-mod ca;
-mod models;
-mod proxy;
+pub mod ca;
+pub mod models;
+pub mod proxy;
 
 use ca::CertificateAuthority;
 use models::{RequestMeta, RequestRecord, TrafficStore};
@@ -141,6 +141,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            // 显式安装 rustls 的 CryptoProvider（ring），避免多 provider 时自动检测失败
+            let _ = rustls::crypto::ring::default_provider().install_default();
             let state = init_state(&app.handle());
             app.manage(state);
             Ok(())
