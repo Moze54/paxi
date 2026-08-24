@@ -10,7 +10,7 @@
 //! 3. 握手成功后，客户端发送真实的 HTTP（HTTPS）请求，此时走普通 HTTP 转发逻辑
 
 use crate::ca::CertificateAuthority;
-use crate::models::{body_to_string, RequestRecord, TrafficStore};
+use crate::models::{body_to_string, decode_body, is_text_content, RequestRecord, TrafficStore};
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
 use hyper::server::conn::http1;
@@ -295,10 +295,28 @@ impl ProxyEngine {
             Ok(b) => b.to_bytes(),
             Err(_) => Bytes::new(),
         };
+
+        // 提取请求的 content-encoding / content-type
+        let req_content_encoding = request_headers
+            .iter()
+            .find(|(k, _)| k.to_lowercase() == "content-encoding")
+            .map(|(_, v)| v.clone());
+        let req_content_type = request_headers
+            .iter()
+            .find(|(k, _)| k.to_lowercase() == "content-type")
+            .map(|(_, v)| v.clone());
+
         let request_body = if request_body_bytes.is_empty() {
             None
+        } else if is_text_content(req_content_type.as_deref()) {
+            let decoded = decode_body(&request_body_bytes, req_content_encoding.as_deref());
+            Some(body_to_string(&decoded))
         } else {
-            Some(body_to_string(&request_body_bytes))
+            Some(format!(
+                "[二进制内容，{} 字节，Content-Type: {}]",
+                request_body_bytes.len(),
+                req_content_type.unwrap_or_else(|| "unknown".to_string())
+            ))
         };
 
         // 构造转发请求
@@ -353,10 +371,32 @@ impl ProxyEngine {
                     Ok(b) => b.to_bytes(),
                     Err(_) => Bytes::new(),
                 };
+
+                // 提取 content-encoding / content-type
+                let content_encoding = response_headers
+                    .iter()
+                    .find(|(k, _)| k.to_lowercase() == "content-encoding")
+                    .map(|(_, v)| v.clone());
+                let content_type = response_headers
+                    .iter()
+                    .find(|(k, _)| k.to_lowercase() == "content-type")
+                    .map(|(_, v)| v.clone());
+
+                // 解压 + 判断是否文本，决定如何存储
                 let response_body = if response_body_bytes.is_empty() {
                     None
+                } else if is_text_content(content_type.as_deref()) {
+                    // 文本内容：先解压再转字符串
+                    let decoded = decode_body(&response_body_bytes, content_encoding.as_deref());
+                    Some(body_to_string(&decoded))
                 } else {
-                    Some(body_to_string(&response_body_bytes))
+                    // 二进制内容：标记为二进制，不转文本
+                    let size = response_body_bytes.len();
+                    Some(format!(
+                        "[二进制内容，{} 字节，Content-Type: {}]",
+                        size,
+                        content_type.unwrap_or_else(|| "unknown".to_string())
+                    ))
                 };
 
                 self.record(RequestRecord {

@@ -40,6 +40,10 @@ rcgen = { version = "0.13", features = ["x509-parser"] }
 x509-parser = "0.16"
 time = { version = "0.3", features = ["formatting"] }
 
+# HTTP body 解压（gzip/deflate/br）
+flate2 = "1"
+brotli = "7"
+
 # Utilities
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
